@@ -19,7 +19,6 @@ from webob import Response
 from xblock.core import XBlock
 from xblock.exceptions import JsonHandlerError
 
-from openedx.core.djangoapps.video_config import video_service_exceptions
 from xmodule.exceptions import NotFoundError
 from xmodule.fields import RelativeTime
 from openedx.core.djangoapps.content_libraries import api as lib_api
@@ -696,6 +695,10 @@ class VideoStudioViewHandlers:
                 ('Content-Language', language),
                 ('Content-Type', mime_type)
             ])
-        except (UnicodeDecodeError, video_config_service.TranscriptsGenerationException, video_config_service.NotFoundError):
+        except (
+            UnicodeDecodeError,
+            video_config_service.TranscriptsGenerationException,
+            video_config_service.NotFoundError
+        ):
             response = Response(status=404)
         return response
