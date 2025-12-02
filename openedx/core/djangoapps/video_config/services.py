@@ -14,7 +14,6 @@ from opaque_keys.edx.keys import CourseKey, UsageKey
 
 from openedx.core.djangoapps.video_config import sharing
 from openedx.core.djangoapps.video_config import video_service_exceptions
-from openedx.core.djangoapps.video_config.transcripts_utils import TranscriptsGenerationException
 from organizations.api import get_course_organization
 from openedx.core.djangoapps.video_config.models import (
     CourseYoutubeBlockedFlag,
@@ -22,7 +21,6 @@ from openedx.core.djangoapps.video_config.models import (
 )
 from openedx.core.djangoapps.video_config.toggles import TRANSCRIPT_FEEDBACK
 from openedx.core.djangoapps.video_pipeline.config.waffle import DEPRECATE_YOUTUBE
-from xmodule.exceptions import NotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -113,9 +111,14 @@ class VideoConfigService:
         Raises:
             TranscriptsGenerationException: If the transcript cannot be found or retrieved
             NotFoundError: If the transcript cannot be found or retrieved
-        """ 
+        """
         # Import here to avoid circular dependency
-        from openedx.core.djangoapps.video_config.transcripts_utils import get_transcript
+        from openedx.core.djangoapps.video_config.transcripts_utils import (
+            get_transcript,
+            TranscriptsGenerationException,
+        )
+        from xmodule.exceptions import NotFoundError
+
         try:
             return get_transcript(video_block, lang, output_format, youtube_id)
         except TranscriptsGenerationException as exc:
