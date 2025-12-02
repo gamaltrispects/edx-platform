@@ -19,6 +19,7 @@ from webob import Response
 from xblock.core import XBlock
 from xblock.exceptions import JsonHandlerError
 
+from openedx.core.djangoapps.video_config import video_service_exceptions
 from xmodule.exceptions import NotFoundError
 from xmodule.fields import RelativeTime
 from openedx.core.djangoapps.content_libraries import api as lib_api
@@ -377,7 +378,7 @@ class VideoStudentViewHandlers:
                     mimetype,
                     add_attachment_header=False
                 )
-            except NotFoundError as exc:
+            except (NotFoundError, video_service_exceptions.NotFoundError) as exc:
                 edx_video_id = clean_video_id(self.edx_video_id)
                 log.warning(
                     '[Translation Dispatch] %s: %s',
@@ -391,7 +392,7 @@ class VideoStudentViewHandlers:
 
             try:
                 content, filename, mimetype = get_transcript(self, lang, output_format=self.transcript_download_format)
-            except NotFoundError:
+            except video_service_exceptions.NotFoundError:
                 return Response(status=404)
 
             response = self.make_transcript_http_response(
