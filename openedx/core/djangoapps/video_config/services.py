@@ -8,9 +8,13 @@ for the extracted video block in xblocks-contrib repository.
 
 import logging
 
+from typing import Optional, Tuple
+
 from opaque_keys.edx.keys import CourseKey, UsageKey
 
 from openedx.core.djangoapps.video_config import sharing
+from openedx.core.djangoapps.video_config import video_service_exceptions
+from openedx.core.djangoapps.video_config.transcripts_utils import TranscriptsGenerationException
 from organizations.api import get_course_organization
 from openedx.core.djangoapps.video_config.models import (
     CourseYoutubeBlockedFlag,
@@ -18,6 +22,7 @@ from openedx.core.djangoapps.video_config.models import (
 )
 from openedx.core.djangoapps.video_config.toggles import TRANSCRIPT_FEEDBACK
 from openedx.core.djangoapps.video_pipeline.config.waffle import DEPRECATE_YOUTUBE
+from xmodule.exceptions import NotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -91,3 +96,33 @@ class VideoConfigService:
         Check if HLS playback is enabled for the course.
         """
         return HLSPlaybackEnabledFlag.feature_enabled(course_id)
+
+    def get_transcript(
+        self,
+        video_block,
+        lang: Optional[str] = None,
+        output_format: str = 'srt',
+        youtube_id: Optional[str] = None,
+    ) -> Tuple[bytes, str, str]:
+        """
+        Retrieve a transcript from the runtime's storage.
+
+        Returns:
+            tuple(bytes, str, str): transcript content, filename, and mimetype.
+
+        Raises:
+            TranscriptsGenerationException: If the transcript cannot be found or retrieved
+            NotFoundError: If the transcript cannot be found or retrieved
+        """ 
+        # Import here to avoid circular dependency
+        from openedx.core.djangoapps.video_config.transcripts_utils import get_transcript
+        try:
+            return get_transcript(video_block, lang, output_format, youtube_id)
+        except TranscriptsGenerationException as exc:
+            raise video_service_exceptions.TranscriptsGenerationException(
+                f"Failed to get transcript: {exc}"
+            ) from exc
+        except NotFoundError as exc:
+            raise video_service_exceptions.NotFoundError(
+                f"Failed to get transcript: {exc}"
+            ) from exc

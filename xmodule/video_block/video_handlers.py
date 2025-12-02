@@ -9,6 +9,7 @@ StudioViewHandlers are handlers for video descriptor instance.
 import json
 import logging
 import math
+from typing import Optional, Tuple
 
 from django.core.files.base import ContentFile
 from django.utils.timezone import now
@@ -18,6 +19,7 @@ from webob import Response
 from xblock.core import XBlock
 from xblock.exceptions import JsonHandlerError
 
+from openedx.core.djangoapps.video_config import video_service_exceptions
 from xmodule.exceptions import NotFoundError
 from xmodule.fields import RelativeTime
 from openedx.core.djangoapps.content_libraries import api as lib_api
@@ -30,7 +32,6 @@ from openedx.core.djangoapps.video_config.transcripts_utils import (
     generate_sjson_for_all_speeds,
     get_html5_ids,
     get_or_create_sjson,
-    get_transcript,
     get_transcript_from_contentstore,
     remove_subs_from_store,
     subs_filename,
@@ -38,6 +39,27 @@ from openedx.core.djangoapps.video_config.transcripts_utils import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def get_transcript(
+    video_block,
+    lang: Optional[str] = None,
+    output_format: str = 'srt',
+    youtube_id: Optional[str] = None,
+) -> Tuple[bytes, str, str]:
+    """
+    Retrieve a transcript using a video block's configuration service.
+
+    Returns:
+        tuple(bytes, str, str): transcript content, filename, and mimetype.
+
+    Raises:
+        Exception: If the video config service is not available or the transcript cannot be retrieved.
+    """
+    video_config_service = video_block.runtime.service(video_block, 'video_config')
+    if not video_config_service:
+        raise Exception("Video config service not found")
+    return video_config_service.get_transcript(video_block, lang, output_format, youtube_id)
 
 
 # Disable no-member warning:
@@ -356,7 +378,7 @@ class VideoStudentViewHandlers:
                     mimetype,
                     add_attachment_header=False
                 )
-            except NotFoundError as exc:
+            except video_service_exceptions.NotFoundError as exc:
                 edx_video_id = clean_video_id(self.edx_video_id)
                 log.warning(
                     '[Translation Dispatch] %s: %s',
@@ -370,7 +392,7 @@ class VideoStudentViewHandlers:
 
             try:
                 content, filename, mimetype = get_transcript(self, lang, output_format=self.transcript_download_format)
-            except NotFoundError:
+            except video_service_exceptions.NotFoundError:
                 return Response(status=404)
 
             response = self.make_transcript_http_response(
@@ -660,8 +682,11 @@ class VideoStudioViewHandlers:
             return Response(json={'error': _('Language is required.')}, status=400)
 
         try:
-            transcript_content, transcript_name, mime_type = get_transcript(
-                video=self, lang=language, output_format=Transcript.SRT
+            video_config_service = self.runtime.service(self, 'video_config')
+            if not video_config_service:
+                return Response(status=404)
+            transcript_content, transcript_name, mime_type = video_config_service.get_transcript(
+                self, lang=language, output_format=Transcript.SRT
             )
             response = Response(transcript_content, headerlist=[
                 (
@@ -671,6 +696,6 @@ class VideoStudioViewHandlers:
                 ('Content-Language', language),
                 ('Content-Type', mime_type)
             ])
-        except (UnicodeDecodeError, TranscriptsGenerationException, NotFoundError):
+        except (UnicodeDecodeError, video_config_service.TranscriptsGenerationException, video_config_service.NotFoundError):
             response = Response(status=404)
         return response
