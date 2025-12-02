@@ -59,12 +59,17 @@ def get_runtime(user: UserType | None) -> LearningCoreXBlockRuntime:
     but the API _does_ allow a single runtime instance to load multiple blocks
     (as long as they're for the same user).
     """
+    from openedx.core.djangoapps.video_config.services import VideoConfigService
+
     params = get_xblock_app_config().get_runtime_params()
     params.update(
         handler_url=get_handler_url,
         authored_data_store=LearningCoreFieldData(),
     )
     runtime = LearningCoreXBlockRuntime(user, **params)
+
+    # Add video_config service to the runtime
+    runtime._services['video_config'] = VideoConfigService()  # pylint: disable=protected-access
 
     return runtime
 
