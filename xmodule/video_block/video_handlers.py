@@ -378,7 +378,7 @@ class VideoStudentViewHandlers:
                     mimetype,
                     add_attachment_header=False
                 )
-            except video_service_exceptions.NotFoundError as exc:
+            except NotFoundError as exc:
                 edx_video_id = clean_video_id(self.edx_video_id)
                 log.warning(
                     '[Translation Dispatch] %s: %s',
@@ -392,7 +392,7 @@ class VideoStudentViewHandlers:
 
             try:
                 content, filename, mimetype = get_transcript(self, lang, output_format=self.transcript_download_format)
-            except video_service_exceptions.NotFoundError:
+            except NotFoundError:
                 return Response(status=404)
 
             response = self.make_transcript_http_response(
