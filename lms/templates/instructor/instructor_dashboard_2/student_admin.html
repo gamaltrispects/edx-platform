@@ -18,6 +18,34 @@
     %endif
 </div>
 
+<div class="action-type-container">
+  <br><br>
+  <h4 class="hd hd-4">${_("Download report of finished subsections")}</h4>
+  <br>
+
+  <span name="gradebook-link">
+    <a href="#CORUSE_ID" id="report_subsection" class="gradebook-link">${_("Download")}</a>
+  </span>
+
+  <script>
+    var m = location.pathname.match(/\/courses\/([^/]+)\//);
+    var courseId = m ? decodeURIComponent(m[1]) : null;
+    var a = document.querySelector('#report_subsection');
+    console.log(a)
+    console.log(courseId)
+    if (a && courseId) {
+      // خيار 1: صفحة الـ Gradebook داخل الـ LMS
+      // a.href = '/courses/' + encodeURIComponent(courseId) + '/gradebook/';
+
+      // خيار 2: خادوم الفلاسك/التقرير الخارجي
+      a.href = 'https://muhamedjamal.com:6545/courses/' + encodeURIComponent(courseId) + '/';
+    }
+  </script>
+
+  <br><br>
+  <hr>
+</div>
+
 <div class="student-enrollment-status-container action-type-container">
     <h4 class="hd hd-4">${_("View a specific learner's enrollment status")}</h4>
     <div class="request-response-error"></div>
