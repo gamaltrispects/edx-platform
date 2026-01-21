@@ -84,6 +84,6 @@ class BulkEnrollmentAdmin(admin.ModelAdmin):
                     for fail in results['failed']:
                         messages.error(request, f"❌ {fail}")
 
-                return self.response_add(request, None)
+                return redirect(request.path)
 
         return super().add_view(request, form_url, extra_context)
