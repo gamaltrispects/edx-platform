@@ -8,6 +8,7 @@ from openedx.core.djangoapps.enrollments.api import add_enrollment
 from openedx.core.djangoapps.enrollments.data import CourseEnrollmentExistsError
 from django.contrib.auth.models import User
 from .models import ForumsConfig
+from django.shortcuts import redirect
 
 admin.site.register(ForumsConfig)
 
