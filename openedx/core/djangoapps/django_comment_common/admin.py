@@ -139,6 +139,7 @@ class BulkEnrollmentAdmin(admin.ModelAdmin):
 
 ##################################################
 
+
 import io
 import csv
 from datetime import datetime
@@ -156,58 +157,38 @@ from lms.djangoapps.grades.course_grade_factory import CourseGradeFactory
 from opaque_keys.edx.keys import CourseKey
 
 
-class BulkGradeExport:
-    """Dummy class for admin interface"""
-    pass
-
-
-class BulkGradeExportForm(forms.Form):
-    """Form for selecting courses"""
+class BulkGradeExport(CourseOverview):
+    """Proxy model to avoid AlreadyRegistered error"""
     
-    courses = forms.MultipleChoiceField(
-        widget=forms.SelectMultiple(attrs={'size': 20, 'style': 'width: 600px;'}),
-        help_text='Hold Ctrl/Cmd to select multiple courses'
-    )
-    
-    export_format = forms.ChoiceField(
-        choices=[
-            ('xlsx', 'Excel (.xlsx) - One sheet per course'),
-            ('csv', 'CSV (.csv) - All courses in one file'),
-        ],
-        initial='xlsx',
-        widget=forms.RadioSelect
-    )
-    
-    include_inactive = forms.BooleanField(
-        required=False,
-        initial=False,
-        label='Include inactive enrollments'
-    )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        course_choices = [
-            (str(course.id), f"{course.display_name} ({course.id})")
-            for course in CourseOverview.objects.all().order_by('display_name')
-        ]
-        self.fields['courses'].choices = course_choices
+    class Meta:
+        proxy = True
+        verbose_name = 'Course Grade Export'
+        verbose_name_plural = 'Course Grade Exports'
 
 
-@admin.register(CourseOverview)
-class CourseOverviewGradeAdmin(admin.ModelAdmin):
-    """Admin with bulk grade export action"""
+@admin.register(BulkGradeExport)
+class BulkGradeExportAdmin(admin.ModelAdmin):
+    """Admin with export actions - no custom templates needed"""
     
-    list_display = ['display_name', 'id', 'start', 'end', 'enrollment_count']
+    list_display = ['display_name', 'id', 'start', 'end', 'get_enrollment_count']
     list_filter = ['start', 'end']
     search_fields = ['display_name', 'id']
+    ordering = ['display_name']
     actions = ['export_grades_xlsx', 'export_grades_csv']
     
-    def enrollment_count(self, obj):
+    # Disable add/delete
+    def has_add_permission(self, request):
+        return False
+    
+    def has_delete_permission(self, request, obj=None):
+        return False
+    
+    def get_enrollment_count(self, obj):
         return CourseEnrollment.objects.filter(course_id=obj.id, is_active=True).count()
-    enrollment_count.short_description = 'Enrolled Students'
+    get_enrollment_count.short_description = 'Students'
     
     def get_student_grades(self, course_id):
-        """Get all students and grades for a course"""
+        """Fetch students and grades"""
         course_key = CourseKey.from_string(str(course_id))
         enrollments = CourseEnrollment.objects.filter(
             course_id=course_key,
@@ -239,19 +220,15 @@ class CourseOverviewGradeAdmin(admin.ModelAdmin):
         return data
     
     def sanitize_sheet_name(self, name):
-        """Excel sheet names: max 31 chars, no special chars"""
         for char in [':', '\\', '/', '?', '*', '[', ']']:
             name = name.replace(char, '_')
         return name[:31]
     
-    @admin.action(description='Export selected courses grades (Excel)')
+    @admin.action(description='Export to Excel (one sheet per course)')
     def export_grades_xlsx(self, request, queryset):
-        """Export grades to Excel with one sheet per course"""
-        
         workbook = openpyxl.Workbook()
         workbook.remove(workbook.active)
         
-        # Styles
         header_font = Font(bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
         thin_border = Border(
@@ -261,70 +238,55 @@ class CourseOverviewGradeAdmin(admin.ModelAdmin):
             bottom=Side(style='thin')
         )
         
-        headers = ['Username', 'Email', 'Full Name', 'Enrolled Date', 'Grade %', 'Letter', 'Passed']
-        col_widths = [18, 35, 25, 15, 10, 10, 10]
+        headers = ['Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Letter', 'Passed']
+        col_widths = [18, 35, 25, 12, 10, 10, 8]
         
         for course in queryset:
-            sheet_name = self.sanitize_sheet_name(course.display_name)
-            ws = workbook.create_sheet(title=sheet_name)
+            ws = workbook.create_sheet(title=self.sanitize_sheet_name(course.display_name))
             
-            # Course info row
+            # Course header
             ws.merge_cells('A1:G1')
-            ws['A1'] = f'Course: {course.id}'
-            ws['A1'].font = Font(bold=True, size=11)
+            ws['A1'] = f'Course: {course.display_name} ({course.id})'
+            ws['A1'].font = Font(bold=True)
             
-            # Headers
+            # Column headers
             for col, header in enumerate(headers, 1):
                 cell = ws.cell(row=3, column=col, value=header)
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.border = thin_border
             
-            # Data
-            students = self.get_student_grades(course.id)
-            for row_idx, student in enumerate(students, 4):
-                ws.cell(row=row_idx, column=1, value=student['username']).border = thin_border
-                ws.cell(row=row_idx, column=2, value=student['email']).border = thin_border
-                ws.cell(row=row_idx, column=3, value=student['full_name']).border = thin_border
-                ws.cell(row=row_idx, column=4, value=student['enrolled']).border = thin_border
-                ws.cell(row=row_idx, column=5, value=student['grade_percent']).border = thin_border
-                ws.cell(row=row_idx, column=6, value=student['letter_grade']).border = thin_border
-                ws.cell(row=row_idx, column=7, value=student['passed']).border = thin_border
+            # Student data
+            for row_idx, student in enumerate(self.get_student_grades(course.id), 4):
+                for col, key in enumerate(['username', 'email', 'full_name', 'enrolled', 'grade_percent', 'letter_grade', 'passed'], 1):
+                    cell = ws.cell(row=row_idx, column=col, value=student[key])
+                    cell.border = thin_border
             
             # Column widths
             for col, width in enumerate(col_widths, 1):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
         
-        # Response
         output = io.BytesIO()
         workbook.save(output)
         output.seek(0)
         
-        filename = f'grades_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
         response = HttpResponse(
             output.read(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
         return response
     
-    @admin.action(description='Export selected courses grades (CSV)')
+    @admin.action(description='Export to CSV (all courses)')
     def export_grades_csv(self, request, queryset):
-        """Export grades to single CSV file"""
-        
-        filename = f'grades_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
         response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
         
         writer = csv.writer(response)
-        writer.writerow([
-            'Course ID', 'Course Name', 'Username', 'Email', 
-            'Full Name', 'Enrolled Date', 'Grade %', 'Letter', 'Passed'
-        ])
+        writer.writerow(['Course ID', 'Course Name', 'Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Letter', 'Passed'])
         
         for course in queryset:
-            students = self.get_student_grades(course.id)
-            for student in students:
+            for student in self.get_student_grades(course.id):
                 writer.writerow([
                     str(course.id),
                     course.display_name,
