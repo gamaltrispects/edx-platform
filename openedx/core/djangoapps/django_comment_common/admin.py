@@ -160,6 +160,7 @@ from openedx.core.djangoapps.content.course_overviews.models import CourseOvervi
 from common.djangoapps.student.models.course_enrollment import CourseEnrollment
 from lms.djangoapps.grades.course_grade_factory import CourseGradeFactory
 from opaque_keys.edx.keys import CourseKey
+from lms.djangoapps.certificates.models import GeneratedCertificate
 
 
 class GradeExport(models.Model):
@@ -222,7 +223,6 @@ class GradeExportAdmin(admin.ModelAdmin):
         else:
             form = GradeExportForm()
 
-        # Use Django's built-in admin template
         fieldsets = [(None, {'fields': ['courses', 'export_format']})]
         admin_form = AdminForm(
             form,
@@ -273,10 +273,26 @@ class GradeExportAdmin(admin.ModelAdmin):
                 grade_percent = round(grade.percent * 100, 2)
                 letter_grade = grade.letter_grade or 'N/A'
                 passed = 'Yes' if grade.passed else 'No'
+
+                # Try to get passed_date from grade first, fallback to certificate
+                try:
+                    if grade.passed and grade.passed_timestamp:
+                        passed_date = grade.passed_timestamp.strftime('%Y-%m-%d')
+                    else:
+                        raise AttributeError("No passed_timestamp")
+                except Exception:
+                    # Fallback: get date from GeneratedCertificate
+                    try:
+                        cert = GeneratedCertificate.objects.get(user=user, course_id=course_key)
+                        passed_date = cert.created_date.strftime('%Y-%m-%d') if cert.created_date else 'N/A'
+                    except Exception:
+                        passed_date = 'N/A'
+
             except Exception:
                 grade_percent = 0
                 letter_grade = 'N/A'
                 passed = 'N/A'
+                passed_date = 'N/A'
 
             data.append({
                 'username': user.username,
@@ -284,8 +300,9 @@ class GradeExportAdmin(admin.ModelAdmin):
                 'full_name': user.get_full_name() or '',
                 'enrolled': enrollment.created.strftime('%Y-%m-%d'),
                 'grade_percent': grade_percent,
-                'letter_grade': letter_grade,
+                'certificate': letter_grade,
                 'passed': passed,
+                'passed_date': passed_date,
             })
         return data
 
@@ -306,7 +323,7 @@ class GradeExportAdmin(admin.ModelAdmin):
             top=Side(style='thin'),
             bottom=Side(style='thin')
         )
-        headers = ['Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Letter', 'Passed']
+        headers = ['Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Certificate', 'Passed', 'Passed Date']
 
         for course_id in course_ids:
             try:
@@ -318,7 +335,7 @@ class GradeExportAdmin(admin.ModelAdmin):
                 course_title = course_id
 
             ws = workbook.create_sheet(title=sheet_name)
-            ws.merge_cells('A1:G1')
+            ws.merge_cells('A1:H1')
             ws['A1'] = course_title
             ws['A1'].font = Font(bold=True, size=14)
 
@@ -329,10 +346,10 @@ class GradeExportAdmin(admin.ModelAdmin):
                 cell.border = thin_border
 
             for row_idx, s in enumerate(self.get_student_grades(course_id), 4):
-                for col, key in enumerate(['username', 'email', 'full_name', 'enrolled', 'grade_percent', 'letter_grade', 'passed'], 1):
+                for col, key in enumerate(['username', 'email', 'full_name', 'enrolled', 'grade_percent', 'certificate', 'passed', 'passed_date'], 1):
                     ws.cell(row=row_idx, column=col, value=s[key]).border = thin_border
 
-            for col, w in enumerate([18, 35, 25, 12, 10, 10, 8], 1):
+            for col, w in enumerate([18, 35, 25, 12, 10, 12, 8, 12], 1):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = w
 
         output = io.BytesIO()
@@ -351,7 +368,7 @@ class GradeExportAdmin(admin.ModelAdmin):
         response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['Course ID', 'Course Name', 'Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Letter', 'Passed'])
+        writer.writerow(['Course ID', 'Course Name', 'Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Certificate', 'Passed', 'Passed Date'])
 
         for course_id in course_ids:
             try:
@@ -369,9 +386,259 @@ class GradeExportAdmin(admin.ModelAdmin):
                     s['full_name'],
                     s['enrolled'],
                     s['grade_percent'],
-                    s['letter_grade'],
-                    s['passed']
+                    s['certificate'],
+                    s['passed'],
+                    s['passed_date']
                 ])
 
         return response
 ############
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# class GradeExport(models.Model):
+#     """Dummy model for admin interface"""
+#     class Meta:
+#         managed = False
+#         verbose_name = 'Grade Export'
+#         verbose_name_plural = 'Grade Export'
+#         app_label = 'django_comment_common'
+
+
+# class GradeExportForm(forms.Form):
+#     courses = forms.MultipleChoiceField(
+#         widget=forms.SelectMultiple(attrs={'size': 20, 'style': 'width: 600px;'}),
+#         help_text='Hold Ctrl/Cmd to select multiple courses'
+#     )
+#     export_format = forms.ChoiceField(
+#         choices=[('xlsx', 'Excel (.xlsx)'), ('csv', 'CSV (.csv)')],
+#         initial='xlsx',
+#         widget=forms.RadioSelect
+#     )
+
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         course_choices = [
+#             (str(course.id), f"{course.display_name} ({course.id})")
+#             for course in CourseOverview.objects.exclude(catalog_visibility__icontains="none").all().order_by('display_name')
+#         ]
+#         self.fields['courses'].choices = course_choices
+
+
+# @admin.register(GradeExport)
+# class GradeExportAdmin(admin.ModelAdmin):
+
+#     def has_change_permission(self, request, obj=None):
+#         return False
+
+#     def has_delete_permission(self, request, obj=None):
+#         return False
+
+#     def has_view_permission(self, request, obj=None):
+#         return False
+
+#     def has_module_permission(self, request):
+#         return True
+
+#     def has_add_permission(self, request):
+#         return True
+
+#     def add_view(self, request, form_url='', extra_context=None):
+#         if request.method == 'POST':
+#             form = GradeExportForm(request.POST)
+#             if form.is_valid():
+#                 course_ids = form.cleaned_data['courses']
+#                 export_format = form.cleaned_data['export_format']
+
+#                 if export_format == 'xlsx':
+#                     return self.export_xlsx(course_ids)
+#                 return self.export_csv(course_ids)
+#         else:
+#             form = GradeExportForm()
+
+#         # Use Django's built-in admin template
+#         fieldsets = [(None, {'fields': ['courses', 'export_format']})]
+#         admin_form = AdminForm(
+#             form,
+#             fieldsets,
+#             prepopulated_fields={},
+#             readonly_fields=[],
+#             model_admin=self
+#         )
+
+#         context = {
+#             **self.admin_site.each_context(request),
+#             'title': 'Grade Export',
+#             'adminform': admin_form,
+#             'form': form,
+#             'opts': self.model._meta,
+#             'save_as': False,
+#             'save_on_top': False,
+#             'has_add_permission': True,
+#             'has_change_permission': False,
+#             'has_delete_permission': False,
+#             'has_view_permission': False,
+#             'has_editable_inline_admin_formsets': False,
+#             'add': True,
+#             'change': False,
+#             'is_popup': False,
+#             'inline_admin_formsets': [],
+#             'errors': form.errors,
+#             'show_save': True,
+#             'show_save_and_continue': False,
+#             'show_save_and_add_another': False,
+#             'show_delete': False,
+#         }
+
+#         return TemplateResponse(request, 'admin/change_form.html', context)
+
+#     def get_student_grades(self, course_id):
+#         course_key = CourseKey.from_string(str(course_id))
+#         enrollments = CourseEnrollment.objects.filter(
+#             course_id=course_key,
+#             is_active=True
+#         ).select_related('user')
+
+#         data = []
+#         for enrollment in enrollments:
+#             user = enrollment.user
+#             try:
+#                 grade = CourseGradeFactory().read(user, course_key=course_key)
+#                 grade_percent = round(grade.percent * 100, 2)
+#                 letter_grade = grade.letter_grade or 'N/A'
+#                 passed = 'Yes' if grade.passed else 'No'
+#             except Exception:
+#                 grade_percent = 0
+#                 letter_grade = 'N/A'
+#                 passed = 'N/A'
+
+#             data.append({
+#                 'username': user.username,
+#                 'email': user.email,
+#                 'full_name': user.get_full_name() or '',
+#                 'enrolled': enrollment.created.strftime('%Y-%m-%d'),
+#                 'grade_percent': grade_percent,
+#                 'letter_grade': letter_grade,
+#                 'passed': passed,
+#             })
+#         return data
+
+#     def sanitize_sheet_name(self, name):
+#         for char in [':', '\\', '/', '?', '*', '[', ']']:
+#             name = name.replace(char, '_')
+#         return name[:31]
+
+#     def export_xlsx(self, course_ids):
+#         workbook = openpyxl.Workbook()
+#         workbook.remove(workbook.active)
+
+#         header_font = Font(bold=True, color='FFFFFF')
+#         header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+#         thin_border = Border(
+#             left=Side(style='thin'),
+#             right=Side(style='thin'),
+#             top=Side(style='thin'),
+#             bottom=Side(style='thin')
+#         )
+#         headers = ['Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Letter', 'Passed']
+
+#         for course_id in course_ids:
+#             try:
+#                 course = CourseOverview.objects.get(id=course_id)
+#                 sheet_name = self.sanitize_sheet_name(course.display_name)
+#                 course_title = course.display_name
+#             except CourseOverview.DoesNotExist:
+#                 sheet_name = 'Unknown'
+#                 course_title = course_id
+
+#             ws = workbook.create_sheet(title=sheet_name)
+#             ws.merge_cells('A1:G1')
+#             ws['A1'] = course_title
+#             ws['A1'].font = Font(bold=True, size=14)
+
+#             for col, h in enumerate(headers, 1):
+#                 cell = ws.cell(row=3, column=col, value=h)
+#                 cell.font = header_font
+#                 cell.fill = header_fill
+#                 cell.border = thin_border
+
+#             for row_idx, s in enumerate(self.get_student_grades(course_id), 4):
+#                 for col, key in enumerate(['username', 'email', 'full_name', 'enrolled', 'grade_percent', 'letter_grade', 'passed'], 1):
+#                     ws.cell(row=row_idx, column=col, value=s[key]).border = thin_border
+
+#             for col, w in enumerate([18, 35, 25, 12, 10, 10, 8], 1):
+#                 ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = w
+
+#         output = io.BytesIO()
+#         workbook.save(output)
+#         output.seek(0)
+
+#         response = HttpResponse(
+#             output.read(),
+#             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+#         )
+#         response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
+#         return response
+
+#     def export_csv(self, course_ids):
+#         response = HttpResponse(content_type='text/csv')
+#         response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+
+#         writer = csv.writer(response)
+#         writer.writerow(['Course ID', 'Course Name', 'Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Letter', 'Passed'])
+
+#         for course_id in course_ids:
+#             try:
+#                 course = CourseOverview.objects.get(id=course_id)
+#                 course_name = course.display_name
+#             except CourseOverview.DoesNotExist:
+#                 course_name = 'Unknown'
+
+#             for s in self.get_student_grades(course_id):
+#                 writer.writerow([
+#                     course_id,
+#                     course_name,
+#                     s['username'],
+#                     s['email'],
+#                     s['full_name'],
+#                     s['enrolled'],
+#                     s['grade_percent'],
+#                     s['letter_grade'],
+#                     s['passed']
+#                 ])
+
+#         return response
+# ############
