@@ -162,6 +162,7 @@ from lms.djangoapps.grades.course_grade_factory import CourseGradeFactory
 from opaque_keys.edx.keys import CourseKey
 from lms.djangoapps.certificates.models import GeneratedCertificate
 
+#from common.djangoapps.student.models import CourseEnrollmentAllowed
 
 class GradeExport(models.Model):
     """Dummy model for admin interface"""
@@ -181,6 +182,11 @@ class GradeExportForm(forms.Form):
         choices=[('xlsx', 'Excel (.xlsx)'), ('csv', 'CSV (.csv)')],
         initial='xlsx',
         widget=forms.RadioSelect
+    )
+    include_invited = forms.BooleanField(
+        required=False,
+        initial=True,
+        label='Include invited (not yet enrolled) users'
     )
 
     def __init__(self, *args, **kwargs):
@@ -216,14 +222,15 @@ class GradeExportAdmin(admin.ModelAdmin):
             if form.is_valid():
                 course_ids = form.cleaned_data['courses']
                 export_format = form.cleaned_data['export_format']
+                include_invited = form.cleaned_data['include_invited']
 
                 if export_format == 'xlsx':
-                    return self.export_xlsx(course_ids)
-                return self.export_csv(course_ids)
+                    return self.export_xlsx(course_ids, include_invited)
+                return self.export_csv(course_ids, include_invited)
         else:
             form = GradeExportForm()
 
-        fieldsets = [(None, {'fields': ['courses', 'export_format']})]
+        fieldsets = [(None, {'fields': ['courses', 'export_format', 'include_invited']})]
         admin_form = AdminForm(
             form,
             fieldsets,
@@ -274,14 +281,12 @@ class GradeExportAdmin(admin.ModelAdmin):
                 letter_grade = grade.letter_grade or 'N/A'
                 passed = 'Yes' if grade.passed else 'No'
 
-                # Try to get passed_date from grade first, fallback to certificate
                 try:
                     if grade.passed and grade.passed_timestamp:
                         passed_date = grade.passed_timestamp.strftime('%Y-%m-%d')
                     else:
                         raise AttributeError("No passed_timestamp")
                 except Exception:
-                    # Fallback: get date from GeneratedCertificate
                     try:
                         cert = GeneratedCertificate.objects.get(user=user, course_id=course_key)
                         passed_date = cert.created_date.strftime('%Y-%m-%d') if cert.created_date else 'N/A'
@@ -303,6 +308,52 @@ class GradeExportAdmin(admin.ModelAdmin):
                 'certificate': letter_grade,
                 'passed': passed,
                 'passed_date': passed_date,
+                'status': 'Enrolled',
+            })
+        return data
+
+    def get_invited_users(self, course_id):
+        """Get users who are invited but not yet enrolled."""
+        from common.djangoapps.student.models import CourseEnrollmentAllowed
+        
+        course_key = CourseKey.from_string(str(course_id))
+        
+        # Get all emails that are already enrolled
+        enrolled_emails = set(
+            CourseEnrollment.objects.filter(
+                course_id=course_key,
+                is_active=True
+            ).values_list('user__email', flat=True)
+        )
+        
+        # Get invited users who haven't enrolled yet
+        invited = CourseEnrollmentAllowed.objects.filter(
+            course_id=course_key
+        ).exclude(email__in=enrolled_emails)
+        
+        data = []
+        for invite in invited:
+            # Check if user exists in the system
+            try:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                user = User.objects.get(email=invite.email)
+                username = user.username
+                full_name = user.get_full_name() or ''
+            except User.DoesNotExist:
+                username = 'N/A (not registered)'
+                full_name = ''
+            
+            data.append({
+                'username': username,
+                'email': invite.email,
+                'full_name': full_name,
+                'enrolled': invite.created.strftime('%Y-%m-%d') if hasattr(invite, 'created') and invite.created else 'N/A',
+                'grade_percent': 'N/A',
+                'certificate': 'N/A',
+                'passed': 'N/A',
+                'passed_date': 'N/A',
+                'status': 'Invited (Auto-enroll)' if invite.auto_enroll else 'Invited',
             })
         return data
 
@@ -311,19 +362,20 @@ class GradeExportAdmin(admin.ModelAdmin):
             name = name.replace(char, '_')
         return name[:31]
 
-    def export_xlsx(self, course_ids):
+    def export_xlsx(self, course_ids, include_invited=True):
         workbook = openpyxl.Workbook()
         workbook.remove(workbook.active)
 
         header_font = Font(bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+        invited_fill = PatternFill(start_color='FFF2CC', end_color='FFF2CC', fill_type='solid')  # Light yellow for invited
         thin_border = Border(
             left=Side(style='thin'),
             right=Side(style='thin'),
             top=Side(style='thin'),
             bottom=Side(style='thin')
         )
-        headers = ['Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Certificate', 'Passed', 'Passed Date']
+        headers = ['Username', 'Email', 'Full Name', 'Enrolled/Invited', 'Grade %', 'Certificate', 'Passed', 'Passed Date', 'Status']
 
         for course_id in course_ids:
             try:
@@ -335,7 +387,7 @@ class GradeExportAdmin(admin.ModelAdmin):
                 course_title = course_id
 
             ws = workbook.create_sheet(title=sheet_name)
-            ws.merge_cells('A1:H1')
+            ws.merge_cells('A1:I1')
             ws['A1'] = course_title
             ws['A1'].font = Font(bold=True, size=14)
 
@@ -345,11 +397,22 @@ class GradeExportAdmin(admin.ModelAdmin):
                 cell.fill = header_fill
                 cell.border = thin_border
 
-            for row_idx, s in enumerate(self.get_student_grades(course_id), 4):
-                for col, key in enumerate(['username', 'email', 'full_name', 'enrolled', 'grade_percent', 'certificate', 'passed', 'passed_date'], 1):
-                    ws.cell(row=row_idx, column=col, value=s[key]).border = thin_border
+            # Get enrolled students
+            all_data = self.get_student_grades(course_id)
+            
+            # Add invited users if requested
+            if include_invited:
+                all_data.extend(self.get_invited_users(course_id))
 
-            for col, w in enumerate([18, 35, 25, 12, 10, 12, 8, 12], 1):
+            for row_idx, s in enumerate(all_data, 4):
+                is_invited = s.get('status', '').startswith('Invited')
+                for col, key in enumerate(['username', 'email', 'full_name', 'enrolled', 'grade_percent', 'certificate', 'passed', 'passed_date', 'status'], 1):
+                    cell = ws.cell(row=row_idx, column=col, value=s[key])
+                    cell.border = thin_border
+                    if is_invited:
+                        cell.fill = invited_fill
+
+            for col, w in enumerate([18, 35, 25, 14, 10, 12, 8, 12, 18], 1):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = w
 
         output = io.BytesIO()
@@ -363,12 +426,12 @@ class GradeExportAdmin(admin.ModelAdmin):
         response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
         return response
 
-    def export_csv(self, course_ids):
+    def export_csv(self, course_ids, include_invited=True):
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="grades_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['Course ID', 'Course Name', 'Username', 'Email', 'Full Name', 'Enrolled', 'Grade %', 'Certificate', 'Passed', 'Passed Date'])
+        writer.writerow(['Course ID', 'Course Name', 'Username', 'Email', 'Full Name', 'Enrolled/Invited', 'Grade %', 'Certificate', 'Passed', 'Passed Date', 'Status'])
 
         for course_id in course_ids:
             try:
@@ -377,7 +440,14 @@ class GradeExportAdmin(admin.ModelAdmin):
             except CourseOverview.DoesNotExist:
                 course_name = 'Unknown'
 
-            for s in self.get_student_grades(course_id):
+            # Get enrolled students
+            all_data = self.get_student_grades(course_id)
+            
+            # Add invited users if requested
+            if include_invited:
+                all_data.extend(self.get_invited_users(course_id))
+
+            for s in all_data:
                 writer.writerow([
                     course_id,
                     course_name,
@@ -388,7 +458,8 @@ class GradeExportAdmin(admin.ModelAdmin):
                     s['grade_percent'],
                     s['certificate'],
                     s['passed'],
-                    s['passed_date']
+                    s['passed_date'],
+                    s['status'],
                 ])
 
         return response
