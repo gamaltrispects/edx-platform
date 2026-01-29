@@ -41,7 +41,7 @@ class BulkEnrollmentForm(forms.Form):
         super().__init__(*args, **kwargs)
         course_choices = [
             (str(course.id), f"{course.display_name} ({course.id})")
-            for course in CourseOverview.objects.all().order_by('display_name')
+            for course in CourseOverview.objects.exclude(catalog_visibility__icontains="none").all().order_by('display_name')
         ]
         self.fields['courses'].choices = course_choices
 
